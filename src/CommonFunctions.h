@@ -29,8 +29,12 @@ public:
 
 struct PCAInfo
 {
+	// lambda0: 曲率
 	double lambda0, scale;
+	// planePt: 平面的中心坐标（所有点的坐标平均）
 	cv::Matx31d normal, planePt;
+	// idxAll: 在所有点里面的坐标
+	// idxIn:  在这个集合内的坐标
 	std::vector<int> idxAll, idxIn;
 
 	PCAInfo &operator =(const PCAInfo &info)

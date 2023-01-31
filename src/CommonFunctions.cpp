@@ -9,6 +9,10 @@ using namespace std;
 
 void LineFunctions::lineFitting( int rows, int cols, std::vector<cv::Point> &contour, double thMinimalLineLength, std::vector<std::vector<cv::Point2d> > &lines )
 {
+	// lines
+	// 1. 第一维: 每个轮廓
+	// 2. 第二维: 每个轮廓下的直线段
+	// 3. 第三维: 每个直线段有首尾两个点
 	// get straight strings from the contour
 	double minDeviation = 6.0;
 	std::vector<std::vector<cv::Point> > straightString;
@@ -19,6 +23,7 @@ void LineFunctions::lineFitting( int rows, int cols, std::vector<cv::Point> &con
 	}
 	for ( int i=0; i<straightString.size(); ++i )
 	{
+		// 每个直线段都需要保证有足够的点
 		if ( straightString[i].size() < thMinimalLineLength )
 		{
 			continue;
@@ -79,10 +84,14 @@ void LineFunctions::subDivision( std::vector<std::vector<cv::Point> > &straightS
 	int max_pixel_index = 0;
 	double max_deviation = -1.0;
 
+	// 这个找的就是 first-line 方向的切线与轮廓的交点
+	// 当这部分轮廓越像一条直线, 那么 max_deviation 越小
+	// 当小于 min_deviation 可以认为是一段 straight line
 	for (int i=first_index, count=contour.size(); i!=last_index; i=(i+1)%count)
 	{
 		cv::Point current = contour[i];
 
+		// 向量 (first -> current) 与 (first -> last) 的叉积
 		double deviation = static_cast<double>( abs( ((current.x - first.x) * (first.y - last.y)) + ((current.y - first.y) * (last.x - first.x)) ) );
 
 		if (deviation > max_deviation)

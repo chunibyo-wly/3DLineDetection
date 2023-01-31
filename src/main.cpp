@@ -156,8 +156,8 @@ void writeOutLinesObj(string filePath,
 
 int main() 
 {
-	string fileData = "D://Facade//data.txt";
-	string fileOut  = "D://Facade//data";
+	string fileData = "../data.txt";
+	string fileOut  = "out";
 
 	// read in data
 	PointCloud<double> pointData; 

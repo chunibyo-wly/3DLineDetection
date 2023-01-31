@@ -386,6 +386,7 @@ void LineDetection3D::planeBased3DLineDetection( std::vector<std::vector<int> > 
 	int numPatches = regions.size();
 
     // step1: fitting 3D plane via PCA
+	// 把新的 region 都取出来，丢到 PCA 里面计算平面方向
 	std::vector<PCAInfo> patches(numPatches);
 #pragma omp parallel for
 	for ( int i=0; i<numPatches; ++i )
@@ -413,6 +414,7 @@ void LineDetection3D::planeBased3DLineDetection( std::vector<std::vector<int> > 
 
 	// step2: 3D line detection
 	planes.resize(patches.size());
+// 只会并行外循环
 #pragma omp parallel for
 	for(int i=0; i<patches.size(); ++i)
 	{
@@ -430,20 +432,27 @@ void LineDetection3D::planeBased3DLineDetection( std::vector<std::vector<int> > 
 			int id = patches[i].idxAll[j];
 			cv::Mat_<double> pt3d = (cv::Mat_<double>(3,1) << pointData.pts[id].x, pointData.pts[id].y, pointData.pts[id].z );
 
+			// 取一个内点，这个内点和平面的中心不会严格意义在一个平面上
+			// v3d: 两者连线构成的向量
 			cv::Mat_<double> v3d = pt3d - planePt;
+			// v3d 投影到平面法向量方向上
 			cv::Mat_<double> vOrtho = v3d.dot(normal) * normal;
+			// 投影向量 - v3d => 论文中的 x 正方向 P_c->P_0'
 			cv::Mat_<double> vPlane = v3d - vOrtho;
 			cv::Mat_<double> ptPlane = planePt + vPlane;
 
 			if(!initialized)
 			{
+				// vPlane: 论文中的 P_0'
 				vX = vPlane * 1.0/(cv::norm(vPlane));
+				// 叉乘得到 Y 正方向
 				vY = vX.cross(normal);
 				vY = vY * 1.0/cv::norm(vY);
 				initialized = true;
 			}
 			if( initialized )
 			{
+				// 直接按照 vX, vY 投影得到的就是像素坐标
 				double x = vPlane.dot(vX);
 				double y = vPlane.dot(vY);
 				pts2d.push_back(cv::Point2d(x,y));
@@ -624,6 +633,7 @@ void LineDetection3D::outliersRemoval( std::vector<PLANE> &planes )
 			orients[m].resize(planes[i].lines3d[m].size());
 			for (int n=0; n<planes[i].lines3d[m].size(); ++n)
 			{
+				// 首尾相减获取直线段
 				cv::Mat orientTemp = cv::Mat(planes[i].lines3d[m][n][1] - planes[i].lines3d[m][n][0]);
 				double lengthTemp = cv::norm(orientTemp);
 				lengthsAll.push_back(lengthTemp);
@@ -640,6 +650,7 @@ void LineDetection3D::outliersRemoval( std::vector<PLANE> &planes )
 				count ++;
 			}
 		}
+		// 按直线段长度排序
 		std::sort( lineInfos.begin(), lineInfos.end(), [](const std::pair<int, double>& lhs, const std::pair<int, double>& rhs) { return lhs.second > rhs.second; } );
 
 		std::vector<cv::Mat> clusterOrient;
@@ -651,13 +662,16 @@ void LineDetection3D::outliersRemoval( std::vector<PLANE> &planes )
 
 			if (!clusterInfos.size())
 			{
+				// 以最长的建立 cluster
 				clusterInfos.push_back(std::pair<int, double>(clusterInfos.size(), length));
 				clusterOrient.push_back(orientsAll[id]);
 				continue;
 			}
 
+			// 后面的如果第二第三长的不在已有 cluster 里面，可以再建立 cluster
 			bool isIn = false;
 			double cosValueMin = 100;
+			// 和每个 cluster 比较夹角, 尽量找到最小的 (注意: cos 越小, 两者间角度越大)
 			for (int m=0; m<clusterInfos.size(); ++m)
 			{
 				double cosValue = abs(orientsAll[id].dot(clusterOrient[m]));
@@ -681,9 +695,13 @@ void LineDetection3D::outliersRemoval( std::vector<PLANE> &planes )
 			}
 		}
 
+		// 全局 scale 和当前平面 scale
 		double scaleCur = max(this->scale,planes[i].scale);
 		if ( clusterInfos.size() > 1)
 		{
+			// TODO: 这里的筛选使用的是两个最长直线段所在方向的所有直线段长度加和，判断是否大于阈值
+			// 对应论文 公式6
+			// 但是理论上还是先合并直线效果不会存在误删除平面好一点？
 			double LStruct =  clusterInfos[0].second + clusterInfos[1].second;
 			if( LStruct < thNonStructPlaneRatio*totalLength || LStruct < thStructPlane ) 
 			{
@@ -715,12 +733,14 @@ void LineDetection3D::outliersRemoval( std::vector<PLANE> &planes )
 				std::vector<int> idxOrthoPara;
 				for (int n=0; n<numLines-1; ++n)
 				{
+					// 遍历轮廓的直线段, 前一个 -> 后一个
 					int id1 = n;
 					int id2 = (n+1)%numLines;
 
 					double cosAngle = abs(orients[m][id1].dot(orients[m][id2]));
 					if (cosAngle > thCosAngleParal || cosAngle < thCosAngleOrtho)
 					{
+						// 垂直平行
 						idxOrthoPara.push_back(id1);
 						idxOrthoPara.push_back(id2);
 					}
@@ -748,6 +768,8 @@ void LineDetection3D::outliersRemoval( std::vector<PLANE> &planes )
 				}
 			}
 
+			// 1. 当有大量结构化特征时，可以直接保留下来
+			// 2. 或者单条线段质量足够好
 			std::vector<std::vector<cv::Point3d> > contourTemp;
 			for (int n=0; n<numLines; ++n)
 			{
@@ -827,14 +849,20 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 	std::vector<std::pair<int, double> > lineInfos(lines.size());
 	for ( int i=0; i<lines.size(); ++i )
 	{
+		// 直线段
 		cv::Mat v(lines[i][1]-lines[i][0]);
 		double length = cv::norm(v);
+		// v 变成方向向量
 		v *= 1.0/length;
 
+		// 从原点->直线段中点的向量
 		cv::Mat ptmid((lines[i][1]+lines[i][0])*0.5);
+		// v 是单位向量, 连线叉积是面积, 底为 1, 所以可以得到高
+		// 那这样来说, 原点连线没必要一定是中点
 		cv::Mat d = v.cross(ptmid)*(1.0/this->magnitd);
 
 		// get the latitude of the line, longitude is not stable
+		// TODO: 看起来默认物体坐标系 xyz 和世界坐标系一样?
 		double latitude = asin(abs(v.at<double>(2)));
 
 		// the length of the line
@@ -846,15 +874,19 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 
 		lineInfos[i] = std::pair<int,double>(i, length);
 	}
+	// 按长度降序排序
 	std::sort( lineInfos.begin(), lineInfos.end(), [](const std::pair<int,double>& lhs, const std::pair<int,double>& rhs) { return lhs.second > rhs.second; } );
 
 	// build grid with latitude
 	double precision = 6.0/180.0*CV_PI;
+	// 九十度按每个六度划分
 	int laSize = CV_PI/2.0/precision;
+	// hash 表
 	std::vector<std::vector<int > > grid(laSize);
 	std::vector<int> gridIndex(lineParas.size());
 	for ( int i=0; i<lineParas.size(); ++i )
 	{
+		// la: 桶
 		int la = lineParas[i][3]/precision;
 		grid[la].push_back(i);
 		gridIndex[i] = la;
@@ -879,6 +911,7 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 
 		// get the merging hypotheses
 		std::vector<int> idHyps;
+		// 论文中说的 left bin 和 right bin
 		for (int j=-1; j<=1; ++j)
 		{
 			int latemp = gridIndex[id0]+j;
@@ -886,6 +919,7 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 			for ( int m=0; m<grid[la].size(); ++m )
 			{
 				int idTemp = grid[la][m];
+				// 公式7
 				if (abs(lineParas[idTemp][4]-d0) < thDisHyps)
 				{
 					idHyps.push_back(idTemp);
@@ -906,6 +940,7 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 			double length1 = lineParas[id1][5];
 
 			// judge the distance between two line
+			// 计算候选线段两端点到 主直线段 的垂直距离
 			cv::Point3d v1 = pts0 - pts1;
 			double disNormal1 = v1.x*vx0 + v1.y*vy0 + v1.z*vz0;
 			cv::Point3d vOrtho1 = v1 - disNormal1*cv::Point3d(vx0, vy0, vz0);
@@ -929,6 +964,7 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 			double dis4 = sqrt(d4.x*d4.x + d4.y*d4.y + d4.z*d4.z);
 			double disMerge = max( max(dis1, dis2), max(dis3, dis4) );
 
+			// 如果有重叠, gapRation 就是负数
 			double gapLength = disMerge - length0 - length1;
 			double gapRatio = gapLength / length0;
 			if ( gapRatio < 0.1 && gapLength < thGapRatio*lineScale )
@@ -936,6 +972,7 @@ void LineDetection3D::lineMerging( std::vector<PLANE> &planes, std::vector<std::
 				// update line id0
 				if (gapRatio > 0)
 				{
+					// 两线段还有个头尾方向需要确定
 					if (dis1 == disMerge)
 					{
 						double disNormal = d1.x*vx0 + d1.y*vy0 + d1.z*vz0;
